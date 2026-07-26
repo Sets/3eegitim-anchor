@@ -37,7 +37,7 @@ Her satır bir mühürdür (JSON):
 | `merkle_root` | Parti satırlarının Merkle kökü (sha256, hex) |
 | `previous_chain_hash` | Bir önceki mührün zincir hash'i (ilk mühürde `null`) |
 | `chain_hash` | `sha256(previous_chain_hash ‖ merkle_root)` |
-| `hash_algorithm` | Mührün üretildiği **kural adı** — bugün `sha256-utc-iso-v1`. Yalnız hash fonksiyonunu değil, yaprağın nasıl yazıldığını da adlandırır (aşağıya bakınız). Kurallar zincirden kısa ömürlü olabilir; hangi halkanın hangi kural altında üretildiği halkanın kendisinde yazılıdır |
+| `hash_algorithm` | Mührün üretildiği **kural adı** — bugün `sha256-utc-iso-v2`. Yalnız hash fonksiyonunu değil, yaprağın nasıl yazıldığını da adlandırır (aşağıya bakınız). Kurallar zincirden kısa ömürlü olabilir; hangi halkanın hangi kural altında üretildiği halkanın kendisinde yazılıdır |
 
 ## Doğrulama
 
@@ -93,13 +93,17 @@ id · created_at · updated_at · tenant_id · actor_type · user_type · user_i
 auditable_type · auditable_id · field_class · context · url · ip_address · session_id
 ```
 
-Sayılar ondalık, `jsonb` alanlar PostgreSQL'in kendi kanonik metin biçiminde yazılır (satırları veritabanından okuyorsanız zaten bu biçimde gelir).
+Sayılar ondalık yazılır.
 
-Zaman alanları **UTC'ye çevrilip sabit kalıpla** yazılır: `YYYY-MM-DDTHH24:MI:SS.US` — örneğin `2026-07-26T02:55:20.188807`. Mikrosaniye altı yuvarlama yoktur, ofset yazılmaz, ayırıcı `T`'dir.
+**`jsonb` alanlar** (`old_values`, `new_values`, `context`) PostgreSQL'in kanonik `jsonb` metin biçiminde yazılır. Bu biçim şu kurallara uyar: nesne anahtarları **önce uzunluğa, sonra bayt sırasına** göre dizilir; yinelenen anahtar tekilleştirilir; anlamsız boşluk atılır; sayılar `numeric` kanonik gösterimiyle yazılır. Satırları veritabanından okuyorsanız (dump, `psql`, bir PG sürücüsü) değer zaten bu biçimde gelir — ek bir işlem yapmayın.
+
+> ⚠ PostgreSQL bu serileştirmeyi sürümler arasında **taahhüt etmez**. Bugüne kadar değişmedi ve biçim oturum ayarlarından bağımsızdır, ama bir major yükseltme değiştirirse bu kural altında üretilmiş kökler toplu olarak uyuşmaz hale gelir. Böyle bir durum **sessiz kalmaz**: günlük doğrulama işi uyuşmazlığı raporlar ve kural yeni bir sürüm adıyla (`…-v3`) yeniden tanımlanır. PostgreSQL dışı bir araçla doğruluyorsanız, bu biçimi birebir taklit etmeniz gerekir.
+
+Zaman alanları **UTC'ye çevrilip sabit kalıpla** yazılır: `YYYY-MM-DDTHH24:MI:SS.US` — örneğin `2026-07-26T02:55:20.188807`. Mikrosaniye altı yuvarlama yoktur, ofset yazılmaz, ayırıcı `T`'dir. *(Denetim kolonları bugün saniye çözünürlüğünde tutulduğu için kesirli kısım pratikte `000000` çıkar; kalıp yine de sabittir ve kural bu kalıba göre uygulanır.)*
 
 > ⚠ Bu ayrıntı kritiktir. PostgreSQL'de bir `timestamptz` doğrudan metne çevrilirse **oturumun `TimeZone` ve `DateStyle` ayarına göre** yazılır; aynı satır `Europe/Istanbul` altında `2026-07-26 05:55:20+03`, `German, DMY` altında `26.07.2026 05:55:20 +03` görünür ve üçü **üç farklı yaprak** üretir. Doğrulayan taraf kendi oturum ayarıyla hesap yaparsa zinciri hatalı biçimde bozuk görür. Bu yüzden kural yazımı sabitler; üretim tarafında da `app.audit_leaf_line()` fonksiyonu aynı kalıbı uygular.
 
-`id` ve `tenant_id` ondalık tam sayı olarak yazılır; `tenant_id` boşsa yerine boş dize konur. Yapraklar **id sırasına göre** dizilir, ikişerli hash'lenerek katlanır. Tek kalan düğüm **yukarı olduğu gibi taşınır** — kopyalanmaz (kopyalamak, iki farklı partinin aynı kökü üretmesine izin veren bilinen bir açıktır).
+Yapraklar **id sırasına göre** dizilir, ikişerli hash'lenerek katlanır. Tek kalan düğüm **yukarı olduğu gibi taşınır** — kopyalanmaz (kopyalamak, iki farklı partinin aynı kökü üretmesine izin veren bilinen bir açıktır).
 
 **3. Yayım zamanı** — bir mührün ne zaman yayımlandığı, deponun public etkinlik geçmişinden okunur. Commit'in kendi tarihine değil, GitHub'ın push kaydına bakılır.
 

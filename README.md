@@ -65,13 +65,37 @@ Zincirde bir kopukluk, o noktadan sonra bir şeyin değiştiğini gösterir.
 
 **2. Kayıtların köke uygunluğu** — bu adım denetim kayıtlarına erişim gerektirir (mahkeme/bilirkişi bağlamı).
 
-Kural `sha256-utc-iso-v1`. Yaprak, her satır için:
+Kural `sha256-utc-iso-v2`. Yaprak, **satırın her kolonunu** kapsar — yalnız kimliğini değil.
+
+Her alan **uzunluk önekiyle** yazılır ve arka arkaya eklenir:
 
 ```
-sha256( id ‖ "|" ‖ created_at ‖ "|" ‖ coalesce(tenant_id, "") )
+alan varsa   →  octet_length(değer) ‖ ":" ‖ değer ‖ ";"
+alan NULL    →  "-;"
+
+yaprak = sha256( alan₁ ‖ alan₂ ‖ … ‖ alanₙ )
 ```
 
-`created_at` **UTC'ye çevrilip sabit kalıpla** yazılır: `YYYY-MM-DDTHH24:MI:SS.US` — örneğin `2026-07-26T02:55:20.188807`. Mikrosaniye altı yuvarlama yoktur, ofset yazılmaz, ayırıcı `T`'dir.
+Uzunluk öneki şart: audit satırları serbest metin taşır (url, user agent, etiket) ve herhangi bir ayırıcı karakter metnin içinde geçebilir — `a|bc` ile `ab|c` aynı yaprağa düşerdi. Uzunluk değerin nerede bittiğini söyler; `NULL` kendi işaretini taşır, boş dizeyle karışmaz. Uzunluk **bayt** cinsindendir (`octet_length`).
+
+Alan sırası, `audit_writes` için:
+
+```
+id · created_at · updated_at · tenant_id · actor_type · user_type · user_id ·
+event · auditable_type · auditable_id · old_values · new_values ·
+url · ip_address · user_agent · tags
+```
+
+`audit_access` için:
+
+```
+id · created_at · updated_at · tenant_id · actor_type · user_type · user_id ·
+auditable_type · auditable_id · field_class · context · url · ip_address · session_id
+```
+
+Sayılar ondalık, `jsonb` alanlar PostgreSQL'in kendi kanonik metin biçiminde yazılır (satırları veritabanından okuyorsanız zaten bu biçimde gelir).
+
+Zaman alanları **UTC'ye çevrilip sabit kalıpla** yazılır: `YYYY-MM-DDTHH24:MI:SS.US` — örneğin `2026-07-26T02:55:20.188807`. Mikrosaniye altı yuvarlama yoktur, ofset yazılmaz, ayırıcı `T`'dir.
 
 > ⚠ Bu ayrıntı kritiktir. PostgreSQL'de bir `timestamptz` doğrudan metne çevrilirse **oturumun `TimeZone` ve `DateStyle` ayarına göre** yazılır; aynı satır `Europe/Istanbul` altında `2026-07-26 05:55:20+03`, `German, DMY` altında `26.07.2026 05:55:20 +03` görünür ve üçü **üç farklı yaprak** üretir. Doğrulayan taraf kendi oturum ayarıyla hesap yaparsa zinciri hatalı biçimde bozuk görür. Bu yüzden kural yazımı sabitler; üretim tarafında da `app.audit_leaf_line()` fonksiyonu aynı kalıbı uygular.
 
@@ -81,7 +105,12 @@ sha256( id ‖ "|" ‖ created_at ‖ "|" ‖ coalesce(tenant_id, "") )
 
 ## Geliştirme dönemi
 
-⚠ `hash_algorithm` alanı `sha256-utc-iso-v1` **olmayan** mühürler, sistem geliştirilirken yapılan denemelerden kalmadır. Yaprak kuralı o sırada zaman damgasını oturum ayarına bağlı yazıyordu; kusur üretime çıkılmadan bulunup düzeltildi. Bu mühürler geliştirme verisini kapsar ve **hiçbir delil iddiası taşımaz**. Depo geçmişi geriye dönük silinemediği için burada duruyorlar; kayıt olarak bırakılmaları, geçmişi temizlemeye çalışmaktan daha dürüsttür.
+⚠ `hash_algorithm` alanı `sha256-utc-iso-v2` **olmayan** mühürler, sistem geliştirilirken yapılan denemelerden kalmadır ve **hiçbir delil iddiası taşımaz**. İki kusur üretime çıkılmadan bulunup düzeltildi:
+
+- **v1 öncesi:** yaprak, zaman damgasını oturumun `TimeZone`/`DateStyle` ayarına göre yazıyordu — aynı satır farklı ayarlarda farklı yaprak üretiyordu.
+- **v1:** yaprak yalnız `(id, created_at, tenant_id)` kapsıyordu; satırın **içeriği** (kim, hangi olay, eski/yeni değerler) hash'in dışındaydı. Yani zincir satırın var olduğunu koruyordu, ne dediğini değil.
+
+Depo geçmişi geriye dönük silinemediği için bu mühürler burada duruyor. Kayıt olarak bırakılmaları, geçmişi temizlemeye çalışmaktan daha dürüsttür — ve kural adının halkada neden taşındığını da somut olarak gösteriyorlar.
 
 ## Sınır
 

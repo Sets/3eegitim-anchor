@@ -1,1 +1,78 @@
-# 3eegitim-anchor
+# 3E Akademi — Denetim Zinciri Tanığı
+
+Bu depo, 3E Akademi platformunun **denetim kayıtlarının bütünlük zincirini** dışarıya yayımladığı yerdir.
+
+Burada **hiçbir denetim kaydı, kişisel veri veya müşteri bilgisi yoktur.** Yalnızca hash'ler ve sayılar bulunur. Bir hash, kapsadığı satırlar hakkında hiçbir şey açığa çıkarmaz — bu yüzden yayımlanması güvenlidir, ve tam da bu yüzden işe yarar.
+
+## Bu depo neye yarar
+
+Platformun denetim tabloları append-only'dir ve her partisi bir **Merkle kökü** ile mühürlenir; mühürler birbirine **hash zinciriyle** bağlanır. Bu zincir, *hiçbir kaydın sonradan değiştirilmediğini* gösterir.
+
+Zincirin tek başına gösteremediği şey **ne zaman kurulduğudur** — prensipte tümü bugün baştan üretilmiş olabilir. Bu deponun varlık sebebi budur: zincir hash'leri buraya yayımlandıkça, geçmiş bizim tarafımızdan yeniden yazılamaz hale gelir.
+
+## Tanıklığın dayandığı üç şart
+
+| Şart | Neden |
+|---|---|
+| Depo **public** | Private depo yalnız GitHub'ın kendi kayıtlarına karşı tanıklık eder; üçüncü bir tarafa bağımsız olarak gösterilemez. |
+| `main` üzerinde **force-push ve silme kapalı** | Açık olsaydı geçmişi biz yeniden yazabilirdik ve tüm mekanizma anlamını yitirirdi. Aktif kurallar: `non_fast_forward`, `deletion`. |
+| Yazma yetkisi **yalnız bu depoya** | Dar yetkili bir deploy key kullanılır; süresi dolan bir token, tanığın sessizce yazılmaz hale gelmesi demektir. |
+
+⚠ **Commit'in kendi tarihi kanıt değildir.** Commit tarihi yazan tarafın verdiği bir alandır ve geriye alınabilir. Tanıklık değeri, **GitHub'ın push'u ne zaman aldığını kendi tarafında kaydetmesinden** gelir; bu kayıt deponun public etkinlik geçmişinden okunur.
+
+## Dosya düzeni
+
+```
+roots/<denetim_tablosu>/<YYYY-AA-GG>.jsonl
+```
+
+Her satır bir mühürdür (JSON):
+
+| Alan | Anlamı |
+|---|---|
+| `audit_table` | Mührün kapsadığı denetim tablosu |
+| `epoch_date` | Mührün alındığı gün |
+| `from_id` / `to_id` | Partinin kapsadığı satır aralığı (id bazlı) |
+| `row_count` | Partideki satır sayısı |
+| `merkle_root` | Parti satırlarının Merkle kökü (sha256, hex) |
+| `previous_chain_hash` | Bir önceki mührün zincir hash'i (ilk mühürde `null`) |
+| `chain_hash` | `sha256(previous_chain_hash ‖ merkle_root)` |
+| `hash_algorithm` | `sha256` |
+
+## Doğrulama
+
+**1. Zincirin kendi içinde tutarlılığı** — bu depo tek başına yeter, bize hiçbir şey sormaya gerek yok:
+
+```bash
+cat roots/audit_writes/*.jsonl | python3 - <<'PY'
+import hashlib, json, sys
+prev = None
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    seal = json.loads(line)
+    if seal["previous_chain_hash"] != prev:
+        print("ZINCIR KOPUK:", seal["from_id"], "->", seal["to_id"])
+    want = hashlib.sha256(((seal["previous_chain_hash"] or "") + seal["merkle_root"]).encode()).hexdigest()
+    if want != seal["chain_hash"]:
+        print("HASH TUTMUYOR:", seal["from_id"], "->", seal["to_id"])
+    prev = seal["chain_hash"]
+print("kontrol bitti")
+PY
+```
+
+Zincirde bir kopukluk, o noktadan sonra bir şeyin değiştiğini gösterir.
+
+**2. Kayıtların köke uygunluğu** — bu adım denetim kayıtlarına erişim gerektirir (mahkeme/bilirkişi bağlamı). Yaprak, her satır için:
+
+```
+sha256( id ‖ "|" ‖ created_at ‖ "|" ‖ coalesce(tenant_id, "") )
+```
+
+Yapraklar **id sırasına göre** dizilir, ikişerli hash'lenerek katlanır. Tek kalan düğüm **yukarı olduğu gibi taşınır** — kopyalanmaz (kopyalamak, iki farklı partinin aynı kökü üretmesine izin veren bilinen bir açıktır).
+
+**3. Yayım zamanı** — bir mührün ne zaman yayımlandığı, deponun public etkinlik geçmişinden okunur. Commit'in kendi tarihine değil, GitHub'ın push kaydına bakılır.
+
+## Sınır
+
+Bu yapı **takdiri delildir**, kesin delil değildir. 5070 sayılı kanunun güvenli elektronik imzaya tanıdığı statü BTK'ya kayıtlı bir elektronik sertifika hizmet sağlayıcısından gelir; bu zincir onu taşımaz. Bilirkişi zinciri yeniden hesaplayıp doğrulayabilir ve kanıt gücü ciddidir; ancak itiraz halinde ispat yükü yayımlayan taraftadır.
